@@ -1,9 +1,12 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-LOCAL_PRECIP_DATA_PATH = Path("/home/tom/local_data/sweden_precip.h5")
-LOCAL_PRECIP_DATA_AVERAGES = Path("/home/tom/local_data/precip_average_train.npy")
-LOCAL_PRECIP_BOUNDARY_MASK = Path("/home/tom/local_data/sweden_precip_observation_boundaries.npy")
+import precip
+
+PRECIP_ROOT_DIR = Path(precip.__file__).parent
+
+LOCAL_PRECIP_DATA_PATH = Path(PRECIP_ROOT_DIR / "data/sweden_precip.h5")
+LOCAL_PRECIP_BOUNDARY_MASK = Path(PRECIP_ROOT_DIR / "data/sweden_precip_observation_boundaries.npy")
 
 CLASSIFICATION_LABELS = list(range(0, 256))
 BOUNDARY_CLASSIFICATION_LABEL = 255
