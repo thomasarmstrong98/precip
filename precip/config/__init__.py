@@ -3,7 +3,7 @@ from pathlib import Path
 
 import precip
 
-PRECIP_ROOT_DIR = Path(precip.__file__).parent
+PRECIP_ROOT_DIR = Path(precip.__file__).parents[1]
 
 LOCAL_PRECIP_DATA_PATH = Path(PRECIP_ROOT_DIR / "data/sweden_precip.h5")
 LOCAL_PRECIP_BOUNDARY_MASK = Path(PRECIP_ROOT_DIR / "data/sweden_precip_observation_boundaries.npy")
