@@ -6,11 +6,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from precip.config import (
-    BOUNDARY_CLASSIFICATION_LABEL,
-    LOCAL_PRECIP_DATA_AVERAGES,
-    LOCAL_PRECIP_DATA_PATH,
-)
+from precip.config import BOUNDARY_CLASSIFICATION_LABEL, LOCAL_PRECIP_DATA_PATH
 
 TRAINING_KEYS_LAST_INDEX = 25000
 VALIDATION_KEYS_LAST_INDEX = 40000
