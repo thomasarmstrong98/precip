@@ -1,20 +1,20 @@
+import random
+import string
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from pathlib import Path
-import random
-import string
-from dataclasses import dataclass
-import precip
 
+import precip
 import wandb
 from precip.config import LOCAL_PRECIP_BOUNDARY_MASK
-from precip.data.dataset import SwedishPrecipitationDataset, InfiniteSampler, npy_loader
+from precip.data.dataset import InfiniteSampler, SwedishPrecipitationDataset, npy_loader
 from precip.models.conv_lstm.model import ConvLSTM
-
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -23,11 +23,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class ModelConfigConvLSTM:
     batch_size: int = 2
     number_of_steps: int = 20
-    training_size_per_step: int = 500
-    validation_size_per_step: int = 150
+    training_size_per_step: int = 1_000
+    validation_size_per_step: int = 300
     lr: float = 5.34e-03
     lr_scheduler_step: int = 3
-    lr_scheduler_gamma: float = 0.6
+    lr_scheduler_gamma: float = 0.85
     weight_decay: float = 1e-4
 
 
@@ -102,7 +102,7 @@ def main():
     )
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.lr_scheduler_gamma)
 
-    def train(number_of_batches: int = 100) -> float:
+    def train(number_of_batches: int = 1_000) -> float:
         model.train()
         loss_history = list()
 
@@ -119,7 +119,7 @@ def main():
         return np.mean(loss_history)
 
     @torch.no_grad()
-    def test(number_of_batches: int = 50) -> float:
+    def test(number_of_batches: int = 300) -> float:
         model.eval()
         validation_loss_history = list()
 
@@ -131,20 +131,27 @@ def main():
         return np.mean(validation_loss_history)
 
     folder_name = (
-        Path(precip.__file__).parent
+        Path(precip.__file__).parents[1]
         / "checkpoints"
-        / "2023_08_28_".join(random.choices(string.ascii_uppercase + string.digits, k=5))
+        / (wandb.run.name + "".join(random.choices(string.ascii_uppercase + string.digits, k=5)))
     )
     folder_name.mkdir(parents=True, exist_ok=True)
 
     for step_num in range(0, config.number_of_steps):
-        train_loss = train()
-        val_loss = test()
+        train_loss = train(config.training_size_per_step)
+        val_loss = test(config.validation_size_per_step)
         scheduler.step()
+
+        number_of_obs = (
+            config.batch_size
+            * config.training_size_per_step
+            * config.number_of_steps
+            * (step_num + 1)
+        )
 
         torch.save(
             {
-                "total_number_observations": 500,
+                "total_number_observations": number_of_obs,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "train_loss": train_loss,
