@@ -69,7 +69,7 @@ class Up(nn.Module):
 # my personal PC doesn't have enough GPU memory for a big UNet :(
 class UNetSmall(nn.Module):
     def __init__(self, n_channels, bilinear=False):
-        super(UNet, self).__init__()
+        super(UNetSmall, self).__init__()
         self.n_channels = n_channels
         self.bilinear = bilinear
 
@@ -118,7 +118,7 @@ class UNet(nn.Module):
         self.up3 = Up(256, 128 // factor, bilinear)
         self.up4 = Up(128, 64, bilinear)
         self.outconv = DoubleConv(64, n_channels)
-        self.regressor_conv = OutConv(n_channels, 1)
+        self.regressor_conv = nn.Conv2d(n_channels, 1, kernel_size=1)
 
     def forward(self, x):
         x1 = self.inc(x)
