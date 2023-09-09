@@ -51,10 +51,10 @@ def main():
         split="train",
         scale=True,
         apply_mask_to_zero=True,
-        insert_channel_dimension=True,
+        insert_channel_dimension=False,
     )
     validation_dataset = SwedishPrecipitationDataset(
-        split="val", scale=True, apply_mask_to_zero=True, insert_channel_dimension=True
+        split="val", scale=True, apply_mask_to_zero=True, insert_channel_dimension=False
     )
 
     training_sampler = InfiniteSampler(training_dataset, shuffle=True)
