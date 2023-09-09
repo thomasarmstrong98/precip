@@ -95,6 +95,8 @@ def main():
             _loss.backward()
             optimizer.step()
             loss_history.append(_loss.item())
+            
+        scheduler.step()
 
         return np.mean(loss_history)
 
