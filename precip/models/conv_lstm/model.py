@@ -1,34 +1,44 @@
-import h5py
-import numpy as np
+"""Originally adapted from https://github.com/aserdega/convlstmgru, MIT License Andriy Serdega"""
+from typing import Any, List, Optional
+
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class ConvLSTMCell(nn.Module):
-    def __init__(self, input_dim, hidden_dim, kernel_size, bias):
-        """
-        Initialize ConvLSTM cell.
+    """ConvLSTM Cell"""
 
-        Parameters
-        ----------
-        input_dim: int
-            Number of channels of input tensor.
-        hidden_dim: int
-            Number of channels of hidden state.
-        kernel_size: (int, int)
-            Size of the convolutional kernel.
-        bias: bool
-            Whether or not to add the bias.
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        kernel_size: int,
+        bias=True,
+        activation=torch.tanh,
+        batchnorm=False,
+    ):
         """
+        ConLSTM Cell
 
+        Args:
+            input_dim: Number of input channels
+            hidden_dim: Number of hidden channels
+            kernel_size: Kernel size
+            bias: Whether to add bias
+            activation: Activation to use
+            batchnorm: Whether to use batch norm
+        """
         super(ConvLSTMCell, self).__init__()
 
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
 
         self.kernel_size = kernel_size
-        self.padding = kernel_size[0] // 2, kernel_size[1] // 2
+        self.padding = kernel_size // 2, kernel_size // 2
         self.bias = bias
+        self.activation = activation
+        self.batchnorm = batchnorm
 
         self.conv = nn.Conv2d(
             in_channels=self.input_dim + self.hidden_dim,
@@ -38,86 +48,104 @@ class ConvLSTMCell(nn.Module):
             bias=self.bias,
         )
 
-    def forward(self, input_tensor, cur_state):
-        h_cur, c_cur = cur_state
+        self.reset_parameters()
 
-        combined = torch.cat([input_tensor, h_cur], dim=1)  # concatenate along channel axis
+    def forward(self, x: torch.Tensor, prev_state: list) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute forward pass
 
+        Args:
+            x: Input tensor of [Batch, Channel, Height, Width]
+            prev_state: Previous hidden state
+
+        Returns:
+            The new hidden state and output
+        """
+        h_prev, c_prev = prev_state
+
+        combined = torch.cat((x, h_prev), dim=1)  # concatenate along channel axis
         combined_conv = self.conv(combined)
+
         cc_i, cc_f, cc_o, cc_g = torch.split(combined_conv, self.hidden_dim, dim=1)
+
         i = torch.sigmoid(cc_i)
         f = torch.sigmoid(cc_f)
+
+        g = self.activation(cc_g)
+        c_cur = f * c_prev + i * g
+
         o = torch.sigmoid(cc_o)
-        g = torch.tanh(cc_g)
 
-        c_next = f * c_cur + i * g
-        h_next = o * torch.tanh(c_next)
+        h_cur = o * self.activation(c_cur)
 
-        return h_next, c_next
+        return h_cur, c_cur
 
-    def init_hidden(self, batch_size, image_size):
-        height, width = image_size
-        return (
-            torch.zeros(batch_size, self.hidden_dim, height, width, device=self.conv.weight.device),
-            torch.zeros(batch_size, self.hidden_dim, height, width, device=self.conv.weight.device),
+    def init_hidden(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Initializes the hidden state
+        Args:
+            x: Input tensor to initialize for
+
+        Returns:
+            Tuple containing the hidden states
+        """
+        b, t, c, h, w = x.size()  # c = 1 even if using grayscale inputs
+        state = (
+            torch.zeros(b, self.hidden_dim, h, w),
+            torch.zeros(b, self.hidden_dim, h, w),
         )
+        state = (state[0].type_as(x), state[1].type_as(x))
+        return state
+
+    def reset_parameters(self) -> None:
+        """Resets parameters"""
+        nn.init.xavier_uniform_(self.conv.weight, gain=nn.init.calculate_gain("tanh"))
+        self.conv.bias.data.zero_()
+
+        if self.batchnorm:
+            self.bn1.reset_parameters()
+            self.bn2.reset_parameters()
 
 
 class ConvLSTM(nn.Module):
-
-    """
-
-    Parameters:
-        input_dim: Number of channels in input
-        hidden_dim: Number of hidden channels
-        kernel_size: Size of kernel in convolutions
-        num_layers: Number of LSTM layers stacked on each other
-        batch_first: Whether or not dimension 0 is the batch or not
-        bias: Bias or no bias in Convolution
-        return_all_layers: Return the list of computations for all layers
-        Note: Will do same padding.
-
-    Input:
-        A tensor of size B, T, C, H, W or T, B, C, H, W
-    Output:
-        A tuple of two lists of length num_layers (or length 1 if return_all_layers is False).
-            0 - layer_output_list is the list of lists of length T of each output
-            1 - last_state_list is the list of last states
-                    each element of the list is a tuple (h, c) for hidden state and memory
-    Example:
-        >> x = torch.rand((32, 10, 64, 128, 128))
-        >> convlstm = ConvLSTM(64, 16, 3, 1, True, True, False)
-        >> _, last_states = convlstm(x)
-        >> h = last_states[0][0]  # 0 for layer index, 0 for h index
-    """
-
     def __init__(
         self,
-        input_channel,
-        hidden_channel,
-        kernel_size,
-        num_layers,
-        batch_first=False,
+        input_dim: int,
+        hidden_dim: int,
+        kernel_size: int,
+        num_layers: int,
         bias=True,
-        return_all_layers=False,
+        activation=torch.tanh,
+        batchnorm=False,
     ):
+        """
+        ConvLSTM module
+
+        Args:
+            input_dim: Input dimension size
+            hidden_dim: Hidden dimension size
+            kernel_size: Kernel size
+            num_layers: Number of layers
+            bias: Whether to add bias
+            activation: Activation function
+            batchnorm: Whether to use batch norm
+        """
         super(ConvLSTM, self).__init__()
-
-        self._check_kernel_size_consistency(kernel_size)
-
+        self.output_channels = hidden_dim
         # Make sure that both `kernel_size` and `hidden_dim` are lists having len == num_layers
         kernel_size = self._extend_for_multilayer(kernel_size, num_layers)
-        hidden_dim = self._extend_for_multilayer(hidden_channel, num_layers)
-        if not len(kernel_size) == len(hidden_dim) == num_layers:
+        hidden_dim = self._extend_for_multilayer(hidden_dim, num_layers)
+        activation = self._extend_for_multilayer(activation, num_layers)
+
+        if not len(kernel_size) == len(hidden_dim) == len(activation) == num_layers:
             raise ValueError("Inconsistent list length.")
 
-        self.input_dim = input_channel
-        self.hidden_dim = hidden_channel
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
         self.kernel_size = kernel_size
         self.num_layers = num_layers
-        self.batch_first = batch_first
+        self.batch_first = True
         self.bias = bias
-        self.return_all_layers = return_all_layers
 
         cell_list = []
         for i in range(0, self.num_layers):
@@ -129,84 +157,85 @@ class ConvLSTM(nn.Module):
                     hidden_dim=self.hidden_dim[i],
                     kernel_size=self.kernel_size[i],
                     bias=self.bias,
+                    activation=activation[i],
+                    batchnorm=batchnorm,
                 )
             )
 
         self.cell_list = nn.ModuleList(cell_list)
 
-    def forward(self, input_tensor, hidden_state=None):
+        self.reset_parameters()
+
+    def forward(
+        self, x: torch.Tensor, hidden_state: Optional[list] = None
+    ) -> tuple[Tensor, list[tuple[Any, Any]]]:
         """
+        Computes the output of the ConvLSTM
 
-        Parameters
-        ----------
-        input_tensor: todo
-            5-D Tensor either of shape (t, b, c, h, w) or (b, t, c, h, w)
-        hidden_state: todo
-            None. todo implement stateful
+        Args:
+            x: Input Tensor of shape [Batch, Time, Channel, Width, Height]
+            hidden_state: List of hidden states to use, if none passed, it will be generated
 
-        Returns
-        -------
-        last_state_list, layer_output
+        Returns:
+            The layer output and list of last states
         """
-        if not self.batch_first:
-            # (t, b, c, h, w) -> (b, t, c, h, w)
-            input_tensor = input_tensor.permute(1, 0, 2, 3, 4)
+        cur_layer_input = torch.unbind(x, dim=int(self.batch_first))
 
-        b, _, _, h, w = input_tensor.size()
+        if not hidden_state:
+            hidden_state = self.get_init_states(x)
 
-        # Implement stateful ConvLSTM
-        if hidden_state is not None:
-            raise NotImplementedError()
-        else:
-            # Since the init is done in forward. Can send image size here
-            hidden_state = self._init_hidden(batch_size=b, image_size=(h, w))
+        seq_len = len(cur_layer_input)
 
-        layer_output_list = []
         last_state_list = []
-
-        seq_len = input_tensor.size(1)
-        cur_layer_input = input_tensor
 
         for layer_idx in range(self.num_layers):
             h, c = hidden_state[layer_idx]
             output_inner = []
             for t in range(seq_len):
-                h, c = self.cell_list[layer_idx](
-                    input_tensor=cur_layer_input[:, t, :, :, :], cur_state=[h, c]
-                )
+                h, c = self.cell_list[layer_idx](x=cur_layer_input[t], prev_state=[h, c])
                 output_inner.append(h)
 
-            layer_output = torch.stack(output_inner, dim=1)
-            cur_layer_input = layer_output
+            cur_layer_input = output_inner
+            last_state_list.append((h, c))
 
-            layer_output_list.append(layer_output)
-            last_state_list.append([h, c])
+        layer_output = torch.stack(output_inner, dim=int(self.batch_first))
 
-        if not self.return_all_layers:
-            layer_output_list = layer_output_list[-1:]
-            last_state_list = last_state_list[-1:]
+        return layer_output, last_state_list
 
-        return layer_output_list, last_state_list
+    def reset_parameters(self) -> None:
+        """
+        Reset parameters
+        """
+        for c in self.cell_list:
+            c.reset_parameters()
 
-    def _init_hidden(self, batch_size, image_size):
+    def get_init_states(self, x: torch.Tensor) -> List[torch.Tensor]:
+        """
+        Constructs the initial hidden states
+
+        Args:
+            x: Tensor to use for constructing state
+
+        Returns:
+            The initial hidden states for all the layers in the network
+        """
         init_states = []
         for i in range(self.num_layers):
-            init_states.append(self.cell_list[i].init_hidden(batch_size, image_size))
+            init_states.append(self.cell_list[i].init_hidden(x))
         return init_states
 
     @staticmethod
-    def _check_kernel_size_consistency(kernel_size):
-        if not (
-            isinstance(kernel_size, tuple)
-            or (
-                isinstance(kernel_size, list)
-                and all([isinstance(elem, tuple) for elem in kernel_size])
-            )
-        ):
-            raise ValueError("`kernel_size` must be tuple or list of tuples")
-
-    @staticmethod
     def _extend_for_multilayer(param, num_layers):
+        """
+        Extends a parameter for multiple layers
+
+        Args:
+            param: Parameter to copy
+            num_layers: Number of layers
+
+        Returns:
+            The extended parameter
+        """
         if not isinstance(param, list):
             param = [param] * num_layers
         return param

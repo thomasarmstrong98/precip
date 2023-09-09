@@ -14,13 +14,14 @@ import precip
 import wandb
 from precip.config import LOCAL_PRECIP_BOUNDARY_MASK
 from precip.data.dataset import InfiniteSampler, SwedishPrecipitationDataset, npy_loader
-from precip.models.unet import UNet
+from precip.models.unet import UNetSmall
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @dataclass(frozen=True)
 class ModelConfigUNet:
+    model_name: str = 'unet'
     batch_size: int = 2
     number_of_steps: int = 20
     training_size_per_step: int = 1_000
@@ -60,9 +61,7 @@ def main():
     train_dataiter, val_dataiter = iter(dataloader), iter(val_dataloader)
 
     mask = npy_loader(LOCAL_PRECIP_BOUNDARY_MASK)
-    model = Model(
-        input_channels=1, hidden_channels=[64], kernel_size=(3, 3), num_layers=1, mask=mask
-    ).to(device)
+    model = UNetSmall(4).to(device)
 
     loss = nn.MSELoss()
     optimizer = optim.Adam(

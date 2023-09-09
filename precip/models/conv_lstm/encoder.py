@@ -35,32 +35,32 @@ class Encoder(nn.Module):
         self.conv_blocks = nn.ModuleList()
         self.conv_lstm_blocks = nn.ModuleList()
 
-        for _block, (conv_config, conv_lstm_config) in enumerate(model_params):
+        for (conv_config, conv_lstm_config) in model_params:
             self.conv_blocks.append(
                 nn.Sequential(nn.Conv2d(**conv_config.__dict__), nn.LeakyReLU(negative_slope=0.2))
             )
 
             self.conv_lstm_blocks.append(ConvLSTM(**conv_lstm_config.__dict__))
 
-    def forward_by_stage(self, x, subnet, rnn):
+    def block_forward(self, x, subnet, rnn):
         batch_size, sequence_size, input_channel, height, width = x.size()
         x = torch.reshape(x, (-1, input_channel, height, width))
         x = subnet(x)
-        x = torch.reshape(x, (seq_number, batch_size, x.size(1), x.size(2), x.size(3)))
-        # hidden = torch.zeros((batch_size, rnn._cell._hidden_size, x.size(3), x.size(4))).to(cfg.GLOBAL.DEVICE)
-        # cell = torch.zeros((batch_size, rnn._cell._hidden_size, x.size(3), x.size(4))).to(cfg.GLOBAL.DEVICE)
-        # state = (hidden, cell)
-        outputs_stage, state_stage = rnn(x, None)
+        x = torch.reshape(x, (sequence_size, batch_size, x.size(1), x.size(2), x.size(3)))
+        outputs_stage, states = rnn(x, None)
+        
+        # only keep the last state
+        states = states[-1]
 
-        return outputs_stage, state_stage
+        return outputs_stage, states
 
     # input: 5D S*B*I*H*W
     def forward(self, x):
         hidden_states = []
-        logging.debug(input.size())
+        
         for block in range(self.n_blocks):
-            input, state_stage = self.forward_by_stage(
-                input, self.conv_blocks[block], self.conv_lstm_blocks[block]
+            x, internal_states = self.block_forward(
+                x, self.conv_blocks[block], self.conv_lstm_blocks[block]
             )
-            hidden_states.append(state_stage)
+            hidden_states.append(internal_states)
         return tuple(hidden_states)

@@ -1,1 +1,1 @@
-from .model import UNet
+from .model import UNet, UNetSmall
