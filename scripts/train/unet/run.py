@@ -21,7 +21,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @dataclass(frozen=True)
 class ModelConfigUNet:
-    model_name: str = 'unet'
+    model_name: str = "unet"
     batch_size: int = 2
     number_of_steps: int = 80
     training_size_per_step: int = 1_000
@@ -30,7 +30,7 @@ class ModelConfigUNet:
     lr_scheduler_step: int = 3
     lr_scheduler_gamma: float = 0.85
     weight_decay: float = 1e-4
-    intermediate_checkpointing: bool =False
+    intermediate_checkpointing: bool = False
 
 
 def parse_args() -> ModelConfigUNet:
@@ -47,8 +47,15 @@ def main():
         config=config.__dict__,
     )
 
-    training_dataset = SwedishPrecipitationDataset(split="train", scale=True)
-    validation_dataset = SwedishPrecipitationDataset(split="val", scale=True)
+    training_dataset = SwedishPrecipitationDataset(
+        split="train",
+        scale=True,
+        apply_mask_to_zero=True,
+        insert_channel_dimension=True,
+    )
+    validation_dataset = SwedishPrecipitationDataset(
+        split="val", scale=True, apply_mask_to_zero=True, insert_channel_dimension=True
+    )
 
     training_sampler = InfiniteSampler(training_dataset, shuffle=True)
     validation_sampler = InfiniteSampler(validation_dataset, shuffle=True)
@@ -70,7 +77,9 @@ def main():
         lr=config.lr,
         weight_decay=config.weight_decay,
     )
-    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.lr_scheduler_gamma)
+    scheduler = optim.lr_scheduler.ExponentialLR(
+        optimizer, gamma=config.lr_scheduler_gamma
+    )
 
     def train(number_of_batches: int = 1_000) -> float:
         model.train()
@@ -104,7 +113,10 @@ def main():
     folder_name = (
         Path(precip.__file__).parents[1]
         / "checkpoints"
-        / (wandb.run.name + "".join(random.choices(string.ascii_uppercase + string.digits, k=5)))
+        / (
+            wandb.run.name
+            + "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
+        )
     )
     folder_name.mkdir(parents=True, exist_ok=True)
 
@@ -119,7 +131,7 @@ def main():
             * config.number_of_steps
             * (step_num + 1)
         )
-        
+
         if config.intermediate_checkpointing:
             torch.save(
                 {
@@ -135,17 +147,16 @@ def main():
         wandb.log({"loss": {"train": np.mean(train_loss), "val": np.mean(val_loss)}})
 
         torch.save(
-                {
-                    "total_number_observations": number_of_obs,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "train_loss": train_loss,
-                    "val_loss": val_loss,
-                },
-                folder_name / "final_model",
-            )
+            {
+                "total_number_observations": number_of_obs,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+            },
+            folder_name / "final_model",
+        )
 
-    
 
 if __name__ == "__main__":
     main()
