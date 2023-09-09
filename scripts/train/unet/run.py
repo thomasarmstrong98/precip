@@ -14,7 +14,7 @@ import precip
 import wandb
 from precip.config import LOCAL_PRECIP_BOUNDARY_MASK
 from precip.data.dataset import InfiniteSampler, SwedishPrecipitationDataset, npy_loader
-from precip.models.unet import UNetSmall
+from precip.models.unet import UNet
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -23,13 +23,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class ModelConfigUNet:
     model_name: str = 'unet'
     batch_size: int = 2
-    number_of_steps: int = 20
+    number_of_steps: int = 80
     training_size_per_step: int = 1_000
     validation_size_per_step: int = 300
     lr: float = 5.34e-03
     lr_scheduler_step: int = 3
     lr_scheduler_gamma: float = 0.85
     weight_decay: float = 1e-4
+    intermediate_checkpointing: bool =False
 
 
 def parse_args() -> ModelConfigUNet:
@@ -60,8 +61,8 @@ def main():
     )
     train_dataiter, val_dataiter = iter(dataloader), iter(val_dataloader)
 
-    mask = npy_loader(LOCAL_PRECIP_BOUNDARY_MASK)
-    model = UNetSmall(4).to(device)
+    mask = (~npy_loader(LOCAL_PRECIP_BOUNDARY_MASK)).float().to(device)
+    model = UNet(4).to(device)
 
     loss = nn.MSELoss()
     optimizer = optim.Adam(
@@ -80,6 +81,7 @@ def main():
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             optimizer.zero_grad()
             out = model(batch_X)
+            out.register_hook(lambda grad: grad * mask)
             _loss = loss(out, batch_y)
             _loss.backward()
             optimizer.step()
@@ -117,20 +119,33 @@ def main():
             * config.number_of_steps
             * (step_num + 1)
         )
-
-        torch.save(
-            {
-                "total_number_observations": number_of_obs,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-            },
-            folder_name / f"step_num_{step_num}",
-        )
+        
+        if config.intermediate_checkpointing:
+            torch.save(
+                {
+                    "total_number_observations": number_of_obs,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                },
+                folder_name / f"step_num_{step_num}",
+            )
 
         wandb.log({"loss": {"train": np.mean(train_loss), "val": np.mean(val_loss)}})
 
+        torch.save(
+                {
+                    "total_number_observations": number_of_obs,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                },
+                folder_name / "final_model",
+            )
+
+    
 
 if __name__ == "__main__":
     main()
