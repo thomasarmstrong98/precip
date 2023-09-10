@@ -62,7 +62,7 @@ class SwedishPrecipitationDataset(Dataset):
             keys = keys[VALIDATION_KEYS_LAST_INDEX:]
 
         # keys = keys[list(range(self.lookback_start_5_mins + 1, len(keys), self.observation_frequency_5_min))]
-        keys = keys[:500]
+        # keys = keys[:500]
 
         return data, keys
 

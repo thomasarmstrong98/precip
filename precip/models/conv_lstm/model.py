@@ -46,6 +46,7 @@ class ConvLSTMCell(nn.Module):
             kernel_size=self.kernel_size,
             padding=self.padding,
             bias=self.bias,
+            padding_mode='reflect'  # zero-padding causing issue for chained convs
         )
 
         self.reset_parameters()
