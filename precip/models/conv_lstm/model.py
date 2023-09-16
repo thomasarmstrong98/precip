@@ -35,7 +35,6 @@ class ConvLSTMCell(nn.Module):
         self.hidden_dim = hidden_dim
 
         self.kernel_size = kernel_size
-        self.padding = kernel_size // 2, kernel_size // 2
         self.bias = bias
         self.activation = activation
         self.batchnorm = batchnorm
@@ -44,9 +43,9 @@ class ConvLSTMCell(nn.Module):
             in_channels=self.input_dim + self.hidden_dim,
             out_channels=4 * self.hidden_dim,
             kernel_size=self.kernel_size,
-            padding=self.padding,
+            padding="same",
             bias=self.bias,
-            padding_mode='reflect'  # zero-padding causing issue for chained convs
+            padding_mode="reflect",  # zero-padding causing issue for chained convs
         )
 
         self.reset_parameters()
