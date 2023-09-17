@@ -6,8 +6,14 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from precip.config import BOUNDARY_CLASSIFICATION_LABEL, LOCAL_PRECIP_DATA_PATH, LOCAL_PRECIP_BOUNDARY_MASK
+from precip.config import (
+    BOUNDARY_CLASSIFICATION_LABEL,
+    LOCAL_PRECIP_BOUNDARY_MASK,
+    LOCAL_PRECIP_DATA_PATH,
+)
 
+# TODO - use train/validation splitting method of DGMR paper
+# aka no strict train/val split between data
 TRAINING_KEYS_LAST_INDEX = 25000
 VALIDATION_KEYS_LAST_INDEX = 40000
 
@@ -28,8 +34,8 @@ class SwedishPrecipitationDataset(Dataset):
         split: str = "train",
         insert_channel_dimension: bool = False,
         scale: bool = True,
-        transform = None,
-        apply_mask_to_zero: bool = True
+        transform=None,
+        apply_mask_to_zero: bool = True,
     ):
         self.root = root
         self.split = split
@@ -41,10 +47,10 @@ class SwedishPrecipitationDataset(Dataset):
         self.insert_channel_dimension = insert_channel_dimension
         self.transform = transform
         self.apply_mask_to_zero = apply_mask_to_zero
-        
+
         if self.apply_mask_to_zero:
             self.mask = npy_loader(LOCAL_PRECIP_BOUNDARY_MASK)
-        
+
         self.data, self.keys = self.load(root)
 
     def load(self, root: Path):
@@ -58,7 +64,7 @@ class SwedishPrecipitationDataset(Dataset):
         elif self.split == "val":
             keys = keys[TRAINING_KEYS_LAST_INDEX:VALIDATION_KEYS_LAST_INDEX]
 
-        else:
+        elif self.split == 'test'
             keys = keys[VALIDATION_KEYS_LAST_INDEX:]
 
         # keys = keys[list(range(self.lookback_start_5_mins + 1, len(keys), self.observation_frequency_5_min))]
@@ -87,23 +93,25 @@ class SwedishPrecipitationDataset(Dataset):
         )
         y = np.asarray(self.data[self.keys[forecast_index]])
 
-        X, y = torch.tensor(X, dtype=torch.float32), torch.tensor(
-            y, dtype=torch.float32
-        )
-        
-        if self.insert_channel_dimension:
-            X = X.unsqueeze(1)
+        X, y = torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
+
+        if self.apply_mask_to_zero and self.scale:
+            # assert self.mask is not None
+            # X = torch.where(~self.mask, X, 0.0)
+            # y = torch.where(~self.mask, y, 0.0)
+            X = torch.where(~(X == 255), X, 0.0)
+            y = torch.where(~(y == 255), y, 0.0)
 
         if self.scale:
             X /= BOUNDARY_CLASSIFICATION_LABEL
-            
+
         if self.transform is not None:
             X, y = self.transform(X), self.transform(y)
-            
-        if self.apply_mask_to_zero and self.scale:
-            assert self.mask is not None
-            X = torch.where(~self.mask, X, 0.0)
-            y = torch.where(~self.mask, y, 0.0)
+
+        if self.insert_channel_dimension:
+            X = X.unsqueeze(1)
+        else:
+            y = y.squeeze(0)
 
         return X, y
 

@@ -2,41 +2,41 @@ import random
 import string
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-from einops.layers.torch import Rearrange
-from torch import nn
+from einops import rearrange
 from torch.utils.data import DataLoader
-from torchvision.transforms import CenterCrop
 from tqdm import tqdm
 
 import precip
 import wandb
 from precip.config import LOCAL_PRECIP_BOUNDARY_MASK
 from precip.data.dataset import InfiniteSampler, SwedishPrecipitationDataset, npy_loader
-from precip.models.vit.model import SimpleViTRegressor
+from precip.models.conv_lstm.model import ConvLSTM, DownConvLSTM, UNetConvLSTM, UpBiLinearConvLSTM
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @dataclass(frozen=True)
-class ModelConfigViT:
-    model_name: str = "simple_vit_regressor"
-    batch_size: int = 5
-    number_of_steps: int = 100
+class ModelConfigConvLSTM:
+    model_name: str = "convlstm_full_prototype"
+    batch_size: int = 2
+    number_of_steps: int = 60
     training_size_per_step: int = 1_000
     validation_size_per_step: int = 300
-    lr: float = 8.01e-02
+    lr: float = 5.34e-03
     lr_scheduler_step: int = 3
     lr_scheduler_gamma: float = 0.85
     weight_decay: float = 1e-4
 
 
-def parse_args() -> ModelConfigViT:
-    return ModelConfigViT()
+def parse_args() -> ModelConfigConvLSTM:
+    return ModelConfigConvLSTM()
 
 
 def main():
@@ -44,40 +44,30 @@ def main():
 
     wandb.init(
         # set the wandb project where this run will be logged
-        project="precip_64x64",
+        project="precip",
         # track hyperparameters and run metadata
         config=config.__dict__,
     )
 
-    tf = CenterCrop(64)
     training_dataset = SwedishPrecipitationDataset(
-        split="train", scale=False, transform=tf, insert_channel_dimension=False
+        split="train", scale=True, apply_mask_to_zero=True, insert_channel_dimension=True
     )
     validation_dataset = SwedishPrecipitationDataset(
-        split="val", scale=True, transform=tf, insert_channel_dimension=False
+        split="val", scale=True, apply_mask_to_zero=True, insert_channel_dimension=True
     )
 
     training_sampler = InfiniteSampler(training_dataset, shuffle=True)
     validation_sampler = InfiniteSampler(validation_dataset, shuffle=True)
 
     dataloader = DataLoader(
-        training_dataset, sampler=training_sampler, batch_size=5, num_workers=12
+        training_dataset, sampler=training_sampler, batch_size=2, num_workers=12
     )
     val_dataloader = DataLoader(
-        validation_dataset, sampler=validation_sampler, batch_size=5, num_workers=12
+        validation_dataset, sampler=validation_sampler, batch_size=2, num_workers=12
     )
     train_dataiter, val_dataiter = iter(dataloader), iter(val_dataloader)
 
-    # mask = npy_loader(LOCAL_PRECIP_BOUNDARY_MASK)
-    model = SimpleViTRegressor(
-        image_size=64,
-        patch_size=64,
-        dim=1024,
-        depth=5,
-        heads=5,
-        mlp_dim=100,
-        channels=4,
-    ).to(device)
+    model = UNetConvLSTM().to(device)
 
     loss = nn.MSELoss()
     optimizer = optim.Adam(
@@ -86,10 +76,6 @@ def main():
         weight_decay=config.weight_decay,
     )
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.lr_scheduler_gamma)
-
-    # scheduler = optim.lr_scheduler.OneCycleLR(
-    #     optimizer=optimizer, max_lr=10 * config.lr, total_steps=config.number_of_steps
-    # )
 
     def train(number_of_batches: int = 1_000) -> float:
         model.train()
@@ -100,6 +86,7 @@ def main():
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             optimizer.zero_grad()
             out = model(batch_X)
+            # out.register_hook(lambda grad: grad * mask)
             _loss = loss(out, batch_y)
             _loss.backward()
             optimizer.step()
