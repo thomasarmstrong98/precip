@@ -104,4 +104,8 @@ wandb/
 
 checkpoints/
 
+log/
+
+notebooks/prototyping/
+
 .vscode/

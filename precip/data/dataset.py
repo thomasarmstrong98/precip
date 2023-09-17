@@ -12,6 +12,8 @@ from precip.config import (
     LOCAL_PRECIP_DATA_PATH,
 )
 
+# TODO - use train/validation splitting method of DGMR paper
+# aka no strict train/val split between data
 TRAINING_KEYS_LAST_INDEX = 25000
 VALIDATION_KEYS_LAST_INDEX = 40000
 
@@ -62,7 +64,7 @@ class SwedishPrecipitationDataset(Dataset):
         elif self.split == "val":
             keys = keys[TRAINING_KEYS_LAST_INDEX:VALIDATION_KEYS_LAST_INDEX]
 
-        else:
+        elif self.split == 'test'
             keys = keys[VALIDATION_KEYS_LAST_INDEX:]
 
         # keys = keys[list(range(self.lookback_start_5_mins + 1, len(keys), self.observation_frequency_5_min))]
