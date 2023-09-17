@@ -2,38 +2,41 @@ import random
 import string
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
+from einops import rearrange
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import precip
 import wandb
-from precip.data.dataset import InfiniteSampler, SwedishPrecipitationDataset
-from precip.models.unet import UNet
+from precip.config import LOCAL_PRECIP_BOUNDARY_MASK
+from precip.data.dataset import InfiniteSampler, SwedishPrecipitationDataset, npy_loader
+from precip.models.conv_lstm.model import ConvLSTM, DownConvLSTM, UNetConvLSTM, UpBiLinearConvLSTM
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @dataclass(frozen=True)
-class ModelConfigUNet:
-    model_name: str = "unet"
+class ModelConfigConvLSTM:
+    model_name: str = "convlstm_full_prototype"
     batch_size: int = 2
-    number_of_steps: int = 80
+    number_of_steps: int = 60
     training_size_per_step: int = 1_000
     validation_size_per_step: int = 300
-    lr: float = 1.87e-03
+    lr: float = 5.34e-03
     lr_scheduler_step: int = 3
     lr_scheduler_gamma: float = 0.85
-    weight_decay: float = 1e-9
-    intermediate_checkpointing: bool = False
+    weight_decay: float = 1e-4
 
 
-def parse_args() -> ModelConfigUNet:
-    return ModelConfigUNet()
+def parse_args() -> ModelConfigConvLSTM:
+    return ModelConfigConvLSTM()
 
 
 def main():
@@ -47,10 +50,10 @@ def main():
     )
 
     training_dataset = SwedishPrecipitationDataset(
-        split="train", scale=True, apply_mask_to_zero=True, insert_channel_dimension=False
+        split="train", scale=True, apply_mask_to_zero=True, insert_channel_dimension=True
     )
     validation_dataset = SwedishPrecipitationDataset(
-        split="val", scale=True, apply_mask_to_zero=True, insert_channel_dimension=False
+        split="val", scale=True, apply_mask_to_zero=True, insert_channel_dimension=True
     )
 
     training_sampler = InfiniteSampler(training_dataset, shuffle=True)
@@ -63,7 +66,8 @@ def main():
         validation_dataset, sampler=validation_sampler, batch_size=2, num_workers=12
     )
     train_dataiter, val_dataiter = iter(dataloader), iter(val_dataloader)
-    model = UNet(4, bilinear=True).to(device)
+
+    model = UNetConvLSTM().to(device)
 
     loss = nn.MSELoss()
     optimizer = optim.Adam(
@@ -71,16 +75,7 @@ def main():
         lr=config.lr,
         weight_decay=config.weight_decay,
     )
-    # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.lr_scheduler_gamma)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer=optimizer,
-        mode="min",
-        factor=0.2,
-        patience=5,
-        threshold=0.1,
-        threshold_mode="rel",
-        cooldown=3,
-    )
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.lr_scheduler_gamma)
 
     def train(number_of_batches: int = 1_000) -> float:
         model.train()
@@ -88,7 +83,7 @@ def main():
 
         for _ in tqdm(range(number_of_batches)):
             (batch_X, batch_y) = next(train_dataiter)
-            batch_X, batch_y = batch_X.to(device), batch_y.squeeze(dim=1).to(device)
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             optimizer.zero_grad()
             out = model(batch_X)
             # out.register_hook(lambda grad: grad * mask)
@@ -121,7 +116,7 @@ def main():
     for step_num in range(0, config.number_of_steps):
         train_loss = train(config.training_size_per_step)
         val_loss = test(config.validation_size_per_step)
-        scheduler.step(val_loss)
+        scheduler.step()
 
         number_of_obs = (
             config.batch_size

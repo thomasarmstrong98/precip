@@ -7,24 +7,23 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from einops.layers.torch import Rearrange
+from torch import nn
 from torch.utils.data import DataLoader
+from torchvision.transforms import CenterCrop
 from tqdm import tqdm
 
 import precip
 import wandb
 from precip.config import LOCAL_PRECIP_BOUNDARY_MASK
 from precip.data.dataset import InfiniteSampler, SwedishPrecipitationDataset, npy_loader
-from torch import nn
-from einops.layers.torch import Rearrange
-from torchvision.transforms import CenterCrop
 from precip.models.vit.model import SimpleViTRegressor
-
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @dataclass(frozen=True)
-class ModelConfigUNet:
+class ModelConfigViT:
     model_name: str = "simple_vit_regressor"
     batch_size: int = 5
     number_of_steps: int = 100
@@ -36,8 +35,8 @@ class ModelConfigUNet:
     weight_decay: float = 1e-4
 
 
-def parse_args() -> ModelConfigUNet:
-    return ModelConfigUNet()
+def parse_args() -> ModelConfigViT:
+    return ModelConfigViT()
 
 
 def main():
@@ -86,9 +85,7 @@ def main():
         lr=config.lr,
         weight_decay=config.weight_decay,
     )
-    scheduler = optim.lr_scheduler.ExponentialLR(
-        optimizer, gamma=config.lr_scheduler_gamma
-    )
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=config.lr_scheduler_gamma)
 
     # scheduler = optim.lr_scheduler.OneCycleLR(
     #     optimizer=optimizer, max_lr=10 * config.lr, total_steps=config.number_of_steps
@@ -125,10 +122,7 @@ def main():
     folder_name = (
         Path(precip.__file__).parents[1]
         / "checkpoints"
-        / (
-            wandb.run.name
-            + "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
-        )
+        / (wandb.run.name + "".join(random.choices(string.ascii_uppercase + string.digits, k=5)))
     )
     folder_name.mkdir(parents=True, exist_ok=True)
 

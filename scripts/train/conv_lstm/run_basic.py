@@ -17,13 +17,13 @@ import precip
 import wandb
 from precip.config import LOCAL_PRECIP_BOUNDARY_MASK
 from precip.data.dataset import InfiniteSampler, SwedishPrecipitationDataset, npy_loader
-from precip.models.conv_lstm.model import ConvLSTM
+from precip.models.conv_lstm.model import ConvLSTM, DownConvLSTM, UpBiLinearConvLSTM
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @dataclass(frozen=True)
-class ModelConfigUNet:
+class ModelConfigConvLSTM:
     model_name: str = "convlstm_full_prototype"
     batch_size: int = 2
     number_of_steps: int = 60
@@ -33,68 +33,6 @@ class ModelConfigUNet:
     lr_scheduler_step: int = 3
     lr_scheduler_gamma: float = 0.85
     weight_decay: float = 1e-4
-
-
-class DownConvLSTM(nn.Module):
-    def __init__(
-        self, in_channels, hidden_channels, out_channels, kernel_size, stride, padding
-    ) -> None:
-        super().__init__()
-
-        self.conv = nn.Conv2d(in_channels, hidden_channels, kernel_size, stride, padding)
-        self.conv_lstm = ConvLSTM(hidden_channels, out_channels, kernel_size, num_layers=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, t, c, h, w = x.size()
-        x = rearrange(x, "b t c h w -> (b t) c h w ")
-        x = rearrange(self.conv(x), "(b t) c h w -> b t c h w", b=b, t=t)
-        x, _ = self.conv_lstm(x)
-        return x
-
-
-class UpBiLinearConvLSTM(nn.Module):
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        upsample_size: Optional[Tuple[int, int]] = None,
-    ) -> None:
-        super().__init__()
-
-        self.conv_lstm = ConvLSTM(in_channels, out_channels, kernel_size, 1)
-        if upsample_size is not None:
-            self.up_scale = nn.UpsamplingBilinear2d(size=upsample_size)
-        else:
-            self.up_scale = nn.UpsamplingBilinear2d(scale_factor=2.0)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x, _ = self.conv_lstm(x)
-        b, t, c, h, w = x.size()
-        x = rearrange(
-            self.up_scale(rearrange(x, "b t c h w -> (b t) c h w")),
-            "(b t) c h w -> b t c h w",
-            b=b,
-            t=t,
-        )
-
-        return x
-
-
-class UNetConvLSTM(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.d1 = DownConvLSTM(1, 8, 64, 4, 1, 1)
-        self.d2 = DownConvLSTM(64, 128, 128, 3, 1, 1)
-        self.d3 = DownConvLSTM(128, 256, 256, 3, 1, 1)
-
-        self.u3 = UpBiLinearConvLSTM(512, 128, 3)
-        self.u2 = UpBiLinearConvLSTM(256, 32, 3)
-        self.u1 = UpBiLinearConvLSTM(64, 8, 1)
-        self.out = nn.Sequential(nn.Conv2d(8, 1, 1, 1))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x
 
 
 class Model(nn.Module):
@@ -174,8 +112,8 @@ class Model(nn.Module):
         return out
 
 
-def parse_args() -> ModelConfigUNet:
-    return ModelConfigUNet()
+def parse_args() -> ModelConfigConvLSTM:
+    return ModelConfigConvLSTM()
 
 
 def main():
