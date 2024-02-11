@@ -1,5 +1,5 @@
 """Originally adapted from https://github.com/aserdega/convlstmgru, MIT License Andriy Serdega"""
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
