@@ -10,8 +10,8 @@ from precip.config import BOUNDARY_CLASSIFICATION_LABEL, LOCAL_PRECIP_DATA_PATH
 
 # TODO - use train/validation splitting method of DGMR paper
 # aka no strict train/val split between data
-TRAINING_KEYS_LAST_INDEX = 25_000
-VALIDATION_KEYS_LAST_INDEX = 40_000
+TRAINING_KEYS_LAST_INDEX = 250_000
+VALIDATION_KEYS_LAST_INDEX = 400_000
 
 
 def npy_loader(path):
@@ -30,9 +30,9 @@ class SwedishPrecipitationDataset(Dataset):
     def __init__(
         self,
         root: Path = LOCAL_PRECIP_DATA_PATH,
-        lookback_start_5_mins: int = 12 * 4,
-        lookback_intervals_5_mins_multiple: int = 6,
-        forecast_horizon_5_mins_multiple: int = 12,
+        lookback_start_5_mins: int = 12 * 2,
+        lookback_intervals_5_mins_multiple: int = 2,
+        forecast_horizon_5_mins_multiple: int = 3,
         forecast_gap_5_mins_multiple: int = 0,
         split: str = "train",
         insert_channel_dimension: bool = False,
@@ -51,19 +51,20 @@ class SwedishPrecipitationDataset(Dataset):
         self.transform = transform
         self.mask_boundary = mask_boundary
 
-        self.data, self.keys = self.load(root)
+        self.data, self.keys = self.load(root, self.split)
 
-    def load(self, root: Path):
+    @staticmethod
+    def load(root: Path, split: str = "train"):
         data = h5py.File(root)
         keys = list(data.keys())
 
-        if self.split == "train":
+        if split == "train":
             keys = keys[:TRAINING_KEYS_LAST_INDEX]
 
-        elif self.split == "val":
+        elif split == "val":
             keys = keys[TRAINING_KEYS_LAST_INDEX:VALIDATION_KEYS_LAST_INDEX]
 
-        elif self.split == "test":
+        elif split == "test":
             keys = keys[VALIDATION_KEYS_LAST_INDEX:]
 
         return data, keys
@@ -115,7 +116,7 @@ class SwedishPrecipitationDataset(Dataset):
 
 class InfiniteSampler(Sampler):
     # L2 of a 256 x 256 single frame - frames below this are not considered in our dataset due to low IC
-    MEDIAN_SCALED_CROPPED_IMAGE = 950.00
+    MEDIAN_SCALED_CROPPED_IMAGE = 1_300.00
 
     def __init__(
         self,
@@ -149,14 +150,14 @@ class InfiniteSampler(Sampler):
     def sample(self, image: torch.Tensor):
         _sum = torch.sum(image**2)
         if self.is_scaled:
-            _sample = _sum < self.MEDIAN_SCALED_CROPPED_IMAGE
+            _sample = _sum > self.MEDIAN_SCALED_CROPPED_IMAGE
         else:
-            _sample = _sum < 255**2 * self.MEDIAN_SCALED_CROPPED_IMAGE
+            _sample = _sum > 255**2 * self.MEDIAN_SCALED_CROPPED_IMAGE
         return _sample
 
     def __iter__(self):
         if self.shuffle:
-            order = np.random.choice(self.n, self.n)
+            order = np.random.choice(self.n, self.n, replace=False)
         else:
             order = np.arange(self.n)
 
@@ -165,7 +166,7 @@ class InfiniteSampler(Sampler):
             X_sample, _ = self.dataset[order[idx]]
 
             # get single image
-            X_sample = X_sample[0][0]
+            X_sample = X_sample[0]
             if not self.sample(X_sample):
                 idx = self._increase_index_maybe_reset(idx)
                 continue
