@@ -63,10 +63,3 @@ class Transformer(nn.Module):
             x = attn(x) + x
             x = ff(x) + x
         return self.norm(x)
-
-
-def concat(x: torch.Tensor, y: torch.Tensor, dim: int) -> torch.Tensor:
-    diff_X = y.size(3) - x.size(3)
-    diff_Y = y.size(4) - x.size(4)
-    x = F.pad(x, [diff_Y // 2, diff_Y - diff_Y // 2, diff_X // 2, diff_X - diff_X // 2])
-    return torch.cat([x, y], dim=dim)

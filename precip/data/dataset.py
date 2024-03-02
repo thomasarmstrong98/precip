@@ -6,74 +6,75 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from precip.config import (
-    BOUNDARY_CLASSIFICATION_LABEL,
-    LOCAL_PRECIP_BOUNDARY_MASK,
-    LOCAL_PRECIP_DATA_PATH,
-)
+from precip.config import BOUNDARY_CLASSIFICATION_LABEL, LOCAL_PRECIP_DATA_PATH
 
 # TODO - use train/validation splitting method of DGMR paper
 # aka no strict train/val split between data
-TRAINING_KEYS_LAST_INDEX = 25000
-VALIDATION_KEYS_LAST_INDEX = 40000
+TRAINING_KEYS_LAST_INDEX = 250_000
+VALIDATION_KEYS_LAST_INDEX = 400_000
 
 
 def npy_loader(path):
-    sample = torch.from_numpy(np.load(path))
+    sample = torch.from_numpy(np.load(path)).float()
     return sample
+
+
+def crop_to_region_of_interest(
+    radar: torch.Tensor, top: int = 555, left: int = 55, height: int = 256, width: int = 256
+) -> torch.Tensor:
+    """Crops the radar image to a central, large region which we focus our forecast to."""
+    return radar[..., top : top + height, left : left + width]
 
 
 class SwedishPrecipitationDataset(Dataset):
     def __init__(
         self,
         root: Path = LOCAL_PRECIP_DATA_PATH,
-        observation_frequency_5_min: int = 12 * 2,
-        lookback_start_5_mins: int = 12 * 4,
-        lookback_intervals_5_mins_multiple: int = 12,
-        forecast_horizon_5_mins: int = 12,
+        lookback_start_5_mins: int = 12 * 2,
+        lookback_intervals_5_mins_multiple: int = 2,
+        forecast_horizon_5_mins_multiple: int = 3,
+        forecast_gap_5_mins_multiple: int = 0,
         split: str = "train",
         insert_channel_dimension: bool = False,
         scale: bool = True,
-        transform=None,
-        apply_mask_to_zero: bool = True,
+        transform=crop_to_region_of_interest,  # by default we are only using 256x256 patch
+        mask_boundary: bool = True,
     ):
         self.root = root
         self.split = split
-        self.observation_frequency_5_min = observation_frequency_5_min
         self.lookback_start_5_mins = lookback_start_5_mins
         self.lookback_intervals_5_mins_multiple = lookback_intervals_5_mins_multiple
-        self.forecast_horizon_5_mins = forecast_horizon_5_mins
+        self.forecast_horizon_5_mins_multiple = forecast_horizon_5_mins_multiple
+        self.forecast_gap = forecast_gap_5_mins_multiple
         self.scale = scale
         self.insert_channel_dimension = insert_channel_dimension
         self.transform = transform
-        self.apply_mask_to_zero = apply_mask_to_zero
+        self.mask_boundary = mask_boundary
 
-        if self.apply_mask_to_zero:
-            self.mask = npy_loader(LOCAL_PRECIP_BOUNDARY_MASK)
+        self.data, self.keys = self.load(root, self.split)
 
-        self.data, self.keys = self.load(root)
-
-    def load(self, root: Path):
+    @staticmethod
+    def load(root: Path, split: str = "train"):
         data = h5py.File(root)
         keys = list(data.keys())
-        # keys = list(data.keys())[self.lookback_start_5_mins +1: ]
 
-        if self.split == "train":
+        if split == "train":
             keys = keys[:TRAINING_KEYS_LAST_INDEX]
 
-        elif self.split == "val":
+        elif split == "val":
             keys = keys[TRAINING_KEYS_LAST_INDEX:VALIDATION_KEYS_LAST_INDEX]
 
-        elif self.split == 'test'
+        elif split == "test":
             keys = keys[VALIDATION_KEYS_LAST_INDEX:]
-
-        # keys = keys[list(range(self.lookback_start_5_mins + 1, len(keys), self.observation_frequency_5_min))]
-        # keys = keys[:500]
 
         return data, keys
 
     def __len__(self) -> int:
-        return len(self.keys) - self.lookback_start_5_mins - self.forecast_horizon_5_mins
+        return (
+            len(self.keys)
+            - self.lookback_start_5_mins
+            - (self.forecast_horizon_5_mins_multiple + self.forecast_gap)
+        )
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
         index += self.lookback_start_5_mins
@@ -83,7 +84,7 @@ class SwedishPrecipitationDataset(Dataset):
                 0, self.lookback_start_5_mins, self.lookback_intervals_5_mins_multiple
             )
         ]
-        forecast_index = index + self.forecast_horizon_5_mins
+        forecast_index = index + self.forecast_horizon_5_mins_multiple + self.forecast_gap
 
         X = np.concatenate(
             [
@@ -95,10 +96,7 @@ class SwedishPrecipitationDataset(Dataset):
 
         X, y = torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
 
-        if self.apply_mask_to_zero and self.scale:
-            # assert self.mask is not None
-            # X = torch.where(~self.mask, X, 0.0)
-            # y = torch.where(~self.mask, y, 0.0)
+        if self.mask_boundary:
             X = torch.where(~(X == 255), X, 0.0)
             y = torch.where(~(y == 255), y, 0.0)
 
@@ -116,29 +114,62 @@ class SwedishPrecipitationDataset(Dataset):
         return X, y
 
 
-# for training large dataset, where we don't want to track by epoch
-# we can just track by numb. of observations, we need inifite
-# sampler from our dataset, to skip StopIteration errors.
 class InfiniteSampler(Sampler):
-    def __init__(self, dataset: Dataset, shuffle: bool = True, reshuffle: bool = False):
-        self.n = len(dataset)
+    # L2 of a 256 x 256 single frame - frames below this are not considered in our dataset due to low IC
+    MEDIAN_SCALED_CROPPED_IMAGE = 1_300.00
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        shuffle: bool = True,
+        reshuffle: bool = False,
+        is_scaled: bool = True,
+    ):
+        self.n = len(dataset)  # type: ignore
         assert self.n > 0
         self.dataset = dataset
         self.shuffle = shuffle
         self.reshuffle = reshuffle
+        self.is_scaled = is_scaled
+
+        if self.shuffle:
+            self.order = np.random.choice(self.n, self.n)
+        else:
+            self.order = np.arange(self.n)
+
+    def _increase_index_maybe_reset(self, index: int) -> int:
+        index += 1
+        if index == self.n:
+            if self.reshuffle:
+                # reshuffle
+                self.order = np.random.choice(self.n, self.n)
+            index = 0  # reset back to beginning without reinit dataset object.
+
+        return index
+
+    def sample(self, image: torch.Tensor):
+        _sum = torch.sum(image**2)
+        if self.is_scaled:
+            _sample = _sum > self.MEDIAN_SCALED_CROPPED_IMAGE
+        else:
+            _sample = _sum > 255**2 * self.MEDIAN_SCALED_CROPPED_IMAGE
+        return _sample
 
     def __iter__(self):
         if self.shuffle:
-            order = np.random.choice(self.n, self.n)
+            order = np.random.choice(self.n, self.n, replace=False)
         else:
             order = np.arange(self.n)
 
         idx = 0
         while True:
-            yield order[idx]
-            idx += 1
-            if idx == len(order):
-                if self.shuffle:
-                    # reshuffle
-                    order = np.random.choice(self.n, self.n)
-                idx = 0  # reset back to beginning without reinit dataset object.
+            X_sample, _ = self.dataset[order[idx]]
+
+            # get single image
+            X_sample = X_sample[0]
+            if not self.sample(X_sample):
+                idx = self._increase_index_maybe_reset(idx)
+                continue
+            else:
+                yield order[idx]
+            idx = self._increase_index_maybe_reset(idx)
