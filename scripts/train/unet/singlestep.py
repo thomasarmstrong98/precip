@@ -22,12 +22,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 @dataclass(frozen=True)
 class Config:
     model_name: str = "unet_64"
-    training_batch_size: int = 4
-    validation_batch_size: int = 4
-    number_of_steps: int = 80
-    training_size_per_step: int = 500
-    validation_size_per_step: int = 1_000
-    lr: float = 3e-4
+    wandb_track: bool = True
+    training_batch_size: int = 8
+    validation_batch_size: int = 8
+    number_of_steps: int = 150
+    training_size_per_step: int = 100
+    validation_size_per_step: int = 200
+    lr: float = 6e-4
     lr_scheduler_step: int = 3
     lr_scheduler_gamma: float = 0.85
     weight_decay: float = 1e-9
@@ -35,7 +36,7 @@ class Config:
     load_from_checkpoint: bool = True
     checkpoint_frequency: int = 10
     checkpoint_path: Path = Path(
-        "/home/tom/dev/precip/checkpoints/pleasant-water-70Q2Y2F/step_num_49.pth"
+        "/home/tom/dev/precip/checkpoints/visionary-night-755TP7A/step_num_53.pth"
     )
 
 
@@ -60,10 +61,12 @@ def train(config: Config):
     train_dataiter = iter(training_dataloader)
     val_dataiter = iter(validation_dataloader)
 
-    wandb.init(
-        # set the wandb project where this run will be logged
-        project="precip"
-    )
+    if config.wandb_track:
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project="precip",
+            config=config.__dict__,
+        )
 
     model = UNet(
         training_dataset.lookback_start_5_mins
@@ -76,26 +79,29 @@ def train(config: Config):
         model.load_state_dict(torch.load(config.checkpoint_path)["model_state_dict"])
 
     loss = nn.MSELoss()
-    optimizer = optim.Adam(
+    # optimizer = optim.Adam(
+    #     model.parameters(),
+    #     lr=config.lr,
+    #     weight_decay=config.weight_decay,
+    # )
+
+    optimizer = optim.Adagrad(
         model.parameters(),
         lr=config.lr,
-        weight_decay=config.weight_decay,
     )
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer=optimizer,
-        T_max=config.number_of_steps,
-        eta_min=6e-4,
+        mode="min",
+        factor=0.1,
+        patience=15,
+        threshold=0.01,
+        threshold_mode="abs",
+        cooldown=3,
     )
 
-    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-    #     optimizer=optimizer,
-    #     mode="min",
-    #     factor=0.5,
-    #     patience=10,
-    #     threshold=0.1,
-    #     threshold_mode="rel",
-    #     cooldown=3,
+    # scheduler = optim.lr_scheduler.ExponentialLR(
+    #     optimizer=optimizer, gamma=config.lr_scheduler_gamma
     # )
 
     def train(number_of_batches: int = 1_000) -> float:
@@ -127,17 +133,19 @@ def train(config: Config):
             validation_loss_history.append(math.sqrt(_loss.item()))
         return np.mean(validation_loss_history)
 
+    run_name = wandb.run.name if config.wandb_track else "local"
+
     folder_name = (
         Path(precip.__file__).parents[1]
         / "checkpoints"
-        / (wandb.run.name + "".join(random.choices(string.ascii_uppercase + string.digits, k=5)))
+        / (run_name + "".join(random.choices(string.ascii_uppercase + string.digits, k=5)))
     )
     folder_name.mkdir(parents=True, exist_ok=True)
     for step_num in range(0, config.number_of_steps):
         train_loss = train(config.training_size_per_step)
         val_loss = test(config.validation_size_per_step)
-        # scheduler.step(val_loss)
-        scheduler.step()
+        scheduler.step(val_loss)
+        # scheduler.step()
 
         number_of_obs = (
             config.training_batch_size
@@ -158,8 +166,9 @@ def train(config: Config):
                 folder_name / f"step_num_{step_num}.pth",
             )
 
-        wandb.log({"loss": {"train": np.mean(train_loss), "val": np.mean(val_loss)}})
-        wandb.log({"scheudler": {"lr": scheduler.get_lr()}})
+        if config.wandb_track:
+            wandb.log({"loss": {"train": np.mean(train_loss), "val": np.mean(val_loss)}})
+            # wandb.log({"scheduler": {"lr": scheduler.get_last_lr()}})
 
 
 def main():

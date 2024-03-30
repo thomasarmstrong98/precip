@@ -1,6 +1,6 @@
-import torch
 from torch import nn
-from .layers import padded_reshape, Down, DoubleConv, Up
+
+from .layers import DoubleConv, Down, Up
 
 
 class UNet(nn.Module):
