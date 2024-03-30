@@ -5,22 +5,20 @@ This repo is a person repo for my explorations into short-term precipitation for
 
 TODOs
 -
-Since this a solo, personal project (although open to collaboration!), there are lots of TODOs:
+Since this a personal project (although open to collaboration!), there are lots of TODOs:
  - Models:
-    - DGMR [in progress]
-    - ForecastNet
+    - DGMR 
+    - NowcastNet [implemented]
     - DDPM/Diffusion models
  - General
-    - Multi-horizon forecasts
-    - Sequential model inference (unrolled for multi-horizon forecasts)
     - Produce probabilistic forecasts (like MetNet)
     - Ablation studies
         - Better model evaluation (forecast spectra etc) [in progress]
         - Orthogonality of forecasts from different models
+        - Integrated Gradients
 
 IN PROGRESS:
--
+ - DDPM/Diffusion models
 
  - General
    - Importance Sampling of observations
-   - DGMR model for single horizon
