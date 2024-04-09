@@ -60,7 +60,7 @@ class NowcastNet(nn.Module):
         _motion = motion.reshape(b, self.output_seq_len, 2, h, w)
         _intensity = intensity.reshape(b, self.output_seq_len, 1, h, w)
 
-        latest_frame = x[:, :1, ...]
+        latest_frame = x[:, -1:, ...]
         grid = self.grid.repeat(b, 1, 1, 1)
 
         steps = []

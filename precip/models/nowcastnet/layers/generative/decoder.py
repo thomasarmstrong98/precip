@@ -5,7 +5,7 @@ from ..shared import SequentialMultiInput, SpectralNorm
 
 
 class SPADE(nn.Module):
-    """Spatially Additive DeNormalization"""
+    """Spatially Adaptive DeNormalization"""
 
     def __init__(
         self,
