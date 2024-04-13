@@ -35,16 +35,22 @@ def warp(
     vgrid[:, 0, ...] = 2.0 * vgrid[:, 0, ...].clone() / max(w - 1, 1) - 1.0
     vgrid[:, 1, ...] = 2.0 * vgrid[:, 1, ...].clone() / max(h - 1, 1) - 1.0
     vgrid = vgrid.permute(0, 2, 3, 1)
-    return F.grid_sample(state, vgrid, padding_mode=padding_mode, mode=mode, align_corners=True)
+    return F.grid_sample(
+        state, vgrid, padding_mode=padding_mode, mode=mode, align_corners=True
+    )
 
 
 class NowcastNet(nn.Module):
-    def __init__(self, input_seq_len: int, output_seq_len: int, use_cuda: bool = True) -> None:
+    def __init__(
+        self, input_seq_len: int, output_seq_len: int, use_cuda: bool = True
+    ) -> None:
         super().__init__()
         self.input_seq_len = input_seq_len
         self.output_seq_len = output_seq_len
 
-        self.evolution_network = EvolutionNetwork(self.input_seq_len, self.output_seq_len, 4)
+        self.evolution_network = EvolutionNetwork(
+            self.input_seq_len, self.output_seq_len, 4
+        )
         self.generative_encoder = GenerativeEncoder(input_seq_len + output_seq_len)
         self.noise_projector = NoiseProjector(32)
         self.generative_decoder = GenerativeDecoder(
@@ -74,7 +80,9 @@ class NowcastNet(nn.Module):
         evolution_result = torch.cat(steps, dim=1)
         evo_feature = self.generative_encoder(torch.cat([x, evolution_result], dim=1))
         ngf = 32
-        noise = torch.randn(b, ngf, 256 // 32, 256 // 32).to("cuda" if self.use_cuda else "cpu")
+        noise = torch.randn(b, ngf, 256 // 32, 256 // 32).to(
+            "cuda" if self.use_cuda else "cpu"
+        )
         noise_f = (
             self.noise_projector(noise)
             .reshape(1, -1, 4, 4, 8, 8)
@@ -84,4 +92,7 @@ class NowcastNet(nn.Module):
 
         # build input to generative decoder
         feature = torch.cat([evo_feature, noise_f], dim=1)
-        return self.generative_decoder(feature, evolution_result)
+        forecasts = self.generative_decoder(feature, evolution_result)
+
+        # targets are in [0, 1], cast our forecasts into the same space
+        return torch.sigmoid(forecasts)

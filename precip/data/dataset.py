@@ -15,7 +15,11 @@ def npy_loader(path):
 
 
 def crop_to_region_of_interest(
-    radar: torch.Tensor, top: int = 555, left: int = 55, height: int = 256, width: int = 256
+    radar: torch.Tensor,
+    top: int = 555,
+    left: int = 55,
+    height: int = 256,
+    width: int = 256,
 ) -> torch.Tensor:
     """Crops the radar image to a central, large region which we focus our forecast to."""
     return radar[..., top : top + height, left : left + width]
@@ -24,8 +28,8 @@ def crop_to_region_of_interest(
 class SwedishPrecipitationDataset(Dataset):
     # TODO - smarter train/validation splitting.
 
-    TRAINING_KEYS_LAST_INDEX = 250_000
-    VALIDATION_KEYS_LAST_INDEX = 400_000
+    TRAINING_KEYS_LAST_INDEX = 375_000
+    VALIDATION_KEYS_LAST_INDEX = 450_000
 
     def __init__(
         self,
@@ -50,12 +54,18 @@ class SwedishPrecipitationDataset(Dataset):
         self.lookback_start_5_mins_multiple = lookback_start_5_mins_multiple
         self.lookback_intervals_5_mins_multiple = lookback_intervals_5_mins_multiple
         self.forecast_multistep = forecast_multistep
-        self.forecast_horizon_start_5_mins_multiple = forecast_horizon_start_5_mins_multiple
+        self.forecast_horizon_start_5_mins_multiple = (
+            forecast_horizon_start_5_mins_multiple
+        )
         self.forecast_intervals_5_mins_multiple = forecast_intervals_5_mins_multiple
         if not forecast_multistep:
-            self.forecast_horizon_end_5_mins_multiple = forecast_horizon_end_5_mins_multiple
+            self.forecast_horizon_end_5_mins_multiple = (
+                forecast_horizon_end_5_mins_multiple
+            )
         else:
-            self.forecast_horizon_end_5_mins_multiple = forecast_horizon_end_5_mins_multiple
+            self.forecast_horizon_end_5_mins_multiple = (
+                forecast_horizon_end_5_mins_multiple
+            )
         self.forecast_gap = forecast_gap_5_mins_multiple
         self.subsample = subsample
         self.scale = scale
@@ -75,13 +85,17 @@ class SwedishPrecipitationDataset(Dataset):
 
         if split == "train":
             keys = keys[
-                : int(SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX * self.subsample)
+                : int(
+                    SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX
+                    * self.subsample
+                )
             ]  # subsample means only train on part of dataset
 
         elif split == "val":
             keys = keys[
                 SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX : int(
-                    SwedishPrecipitationDataset.VALIDATION_KEYS_LAST_INDEX * self.subsample
+                    SwedishPrecipitationDataset.VALIDATION_KEYS_LAST_INDEX
+                    * self.subsample
                 )
             ]
 
@@ -102,7 +116,9 @@ class SwedishPrecipitationDataset(Dataset):
         observation_indicies = [
             (index - lookback)
             for lookback in range(
-                0, self.lookback_start_5_mins_multiple, self.lookback_intervals_5_mins_multiple
+                0,
+                self.lookback_start_5_mins_multiple,
+                self.lookback_intervals_5_mins_multiple,
             )
         ][::-1]
 
@@ -116,7 +132,9 @@ class SwedishPrecipitationDataset(Dataset):
         forecast_index_start = (
             index + self.forecast_horizon_start_5_mins_multiple + self.forecast_gap
         )
-        forecast_index_end = index + self.forecast_horizon_end_5_mins_multiple + self.forecast_gap
+        forecast_index_end = (
+            index + self.forecast_horizon_end_5_mins_multiple + self.forecast_gap
+        )
 
         if self.forecast_multistep:
             y = np.concatenate(
@@ -132,7 +150,10 @@ class SwedishPrecipitationDataset(Dataset):
         else:
             y = np.asarray(self.data[self.keys[forecast_index_end]])
 
-        X, y = torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
+        X, y = (
+            torch.tensor(X, dtype=torch.float32),
+            torch.tensor(y, dtype=torch.float32),
+        )
 
         if self.mask_boundary:
             X = torch.where(~(X == 255), X, 0.0)
@@ -140,6 +161,7 @@ class SwedishPrecipitationDataset(Dataset):
 
         if self.scale:
             X /= BOUNDARY_CLASSIFICATION_LABEL
+            y /= BOUNDARY_CLASSIFICATION_LABEL
 
         if self.transform is not None:
             X, y = self.transform(X), self.transform(y)
@@ -153,19 +175,14 @@ class SwedishPrecipitationDataset(Dataset):
 
 
 class InfiniteSampler(Sampler):
-    # L2 of a 512 x 512 single frame, which displays substantial precipitation - TODO, revist
-    MEDIAN_SCALED_CROPPED_IMAGE = 2_500.00
-
     def __init__(
         self,
-        dataset: Dataset,
+        n: int,
         shuffle: bool = True,
         reshuffle: bool = False,
         is_scaled: bool = True,
     ):
-        self.n = len(dataset)  # type: ignore
-        assert self.n > 0
-        self.dataset = dataset
+        self.n = n
         self.shuffle = shuffle
         self.reshuffle = reshuffle
         self.is_scaled = is_scaled
@@ -185,29 +202,103 @@ class InfiniteSampler(Sampler):
 
         return index
 
-    def sample(self, image: torch.Tensor):
-        _sum = torch.sum(image**2)
-        if self.is_scaled:
-            _sample = _sum > self.MEDIAN_SCALED_CROPPED_IMAGE
-        else:
-            _sample = _sum > (255**2) * self.MEDIAN_SCALED_CROPPED_IMAGE
-        return _sample
-
     def __iter__(self):
-        if self.shuffle:
-            order = np.random.choice(self.n, self.n, replace=False)
-        else:
-            order = np.arange(self.n)
-
         idx = 0
         while True:
-            X_sample, _ = self.dataset[order[idx]]
-
-            # get single image
-            X_sample = X_sample[-1]
-            if not self.sample(X_sample):
-                idx = self._increase_index_maybe_reset(idx)
-                continue
-            else:
-                yield order[idx]
+            yield self.order[idx]
             idx = self._increase_index_maybe_reset(idx)
+
+
+class ObservationWeightedOnlineSampler(InfiniteSampler):
+    L2_SAMPLING_THRESHOLD = (
+        2_500.00  # take only observations with sufficient rainfall ~ 20% of dataset
+    )
+
+    def __init__(
+        self,
+        dataset,
+        shuffle: bool = True,
+        reshuffle: bool = False,
+        is_scaled: bool = True,
+    ):
+        n = len(dataset)
+        super().__init__(n, shuffle, reshuffle, is_scaled)
+        self.dataset = dataset
+
+    @staticmethod
+    def _sample(dataset: SwedishPrecipitationDataset, key: int):
+        X, _ = dataset[key]
+        last_observation = X[-1, ...]
+        sample = (
+            torch.sum(last_observation**2)
+            > ObservationWeightedOnlineSampler.L2_SAMPLING_THRESHOLD
+        )
+        return sample
+
+    def __iter__(self):
+        idx = 0
+        while True:
+            if self._sample(self.dataset, self.order[idx]):
+                yield self.order[idx]
+            idx = self._increase_index_maybe_reset(idx)
+
+
+# class InfiniteSampler(Sampler):
+#     # L2 of a 512 x 512 single frame, which displays substantial precipitation - TODO, revist
+#     MEDIAN_SCALED_CROPPED_IMAGE = 2_500.00
+
+#     def __init__(
+#         self,
+#         dataset: Dataset,
+#         shuffle: bool = True,
+#         reshuffle: bool = False,
+#         is_scaled: bool = True,
+#     ):
+#         self.n = len(dataset)  # type: ignore
+#         assert self.n > 0
+#         self.dataset = dataset
+#         self.shuffle = shuffle
+#         self.reshuffle = reshuffle
+#         self.is_scaled = is_scaled
+
+#         if self.shuffle:
+#             self.order = np.random.choice(self.n, self.n)
+#         else:
+#             self.order = np.arange(self.n)
+
+#     def _increase_index_maybe_reset(self, index: int) -> int:
+#         index += 1
+#         if index == self.n:
+#             if self.reshuffle:
+#                 # reshuffle
+#                 self.order = np.random.choice(self.n, self.n)
+#             index = 0  # reset back to beginning without reinit dataset object.
+
+#         return index
+
+#     def sample(self, image: torch.Tensor):
+#         _sum = torch.sum(image**2)
+#         if self.is_scaled:
+#             _sample = _sum > self.MEDIAN_SCALED_CROPPED_IMAGE
+#         else:
+#             _sample = _sum > (255**2) * self.MEDIAN_SCALED_CROPPED_IMAGE
+#         return _sample
+
+#     def __iter__(self):
+#         if self.shuffle:
+#             order = np.random.choice(self.n, self.n, replace=False)
+#         else:
+#             order = np.arange(self.n)
+
+#         idx = 0
+#         while True:
+#             X_sample, _ = self.dataset[order[idx]]
+
+#             # get single image
+#             X_sample = X_sample[-1]
+#             if not self.sample(X_sample):
+#                 idx = self._increase_index_maybe_reset(idx)
+#                 continue
+#             else:
+#                 yield order[idx]
+#             idx = self._increase_index_maybe_reset(idx)

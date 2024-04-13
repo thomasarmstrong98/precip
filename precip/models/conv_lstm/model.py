@@ -1,4 +1,5 @@
 """Originally adapted from https://github.com/aserdega/convlstmgru, MIT License Andriy Serdega"""
+
 from typing import Any, List, Optional, Tuple
 
 import torch
@@ -30,7 +31,7 @@ class ConvLSTMCell(nn.Module):
             activation: Activation to use
             batchnorm: Whether to use batch norm
         """
-        super(ConvLSTMCell, self).__init__()
+        super().__init__()
 
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -44,14 +45,16 @@ class ConvLSTMCell(nn.Module):
             in_channels=self.input_dim + self.hidden_dim,
             out_channels=4 * self.hidden_dim,
             kernel_size=self.kernel_size,
-            padding="same",
+            padding=(self.kernel_size // 2, self.kernel_size // 2),
             bias=self.bias,
-            padding_mode="reflect",  # zero-padding causing issue for chained convs
+            padding_mode="replicate",  # zero-padding causing issue for chained convs
         )
 
         self.reset_parameters()
 
-    def forward(self, x: torch.Tensor, prev_state: list) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor, prev_state: list
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Compute forward pass
 
@@ -66,7 +69,6 @@ class ConvLSTMCell(nn.Module):
 
         combined = torch.cat((x, h_prev), dim=1)  # concatenate along channel axis
         combined_conv = self.conv(combined)
-
         cc_i, cc_f, cc_o, cc_g = torch.split(combined_conv, self.hidden_dim, dim=1)
 
         i = torch.sigmoid(cc_i)
@@ -102,10 +104,6 @@ class ConvLSTMCell(nn.Module):
         """Resets parameters"""
         nn.init.xavier_uniform_(self.conv.weight, gain=nn.init.calculate_gain("tanh"))
         self.conv.bias.data.zero_()
-
-        if self.batchnorm:
-            self.bn1.reset_parameters()
-            self.bn2.reset_parameters()
 
 
 class ConvLSTM(nn.Module):
@@ -165,8 +163,6 @@ class ConvLSTM(nn.Module):
 
         self.cell_list = nn.ModuleList(cell_list)
 
-        self.reset_parameters()
-
     def forward(
         self, x: torch.Tensor, hidden_state: Optional[list] = None
     ) -> tuple[Tensor, list[tuple[Any, Any]]]:
@@ -193,7 +189,9 @@ class ConvLSTM(nn.Module):
             h, c = hidden_state[layer_idx]
             output_inner = []
             for t in range(seq_len):
-                h, c = self.cell_list[layer_idx](x=cur_layer_input[t], prev_state=[h, c])
+                h, c = self.cell_list[layer_idx](
+                    x=cur_layer_input[t], prev_state=[h, c]
+                )
                 output_inner.append(h)
 
             cur_layer_input = output_inner
@@ -202,13 +200,6 @@ class ConvLSTM(nn.Module):
         layer_output = torch.stack(output_inner, dim=int(self.batch_first))
 
         return layer_output, last_state_list
-
-    def reset_parameters(self) -> None:
-        """
-        Reset parameters
-        """
-        for c in self.cell_list:
-            c.reset_parameters()
 
     def get_init_states(self, x: torch.Tensor) -> List[torch.Tensor]:
         """
@@ -248,8 +239,12 @@ class DownConvLSTM(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.conv = nn.Conv2d(in_channels, hidden_channels, kernel_size, stride, padding)
-        self.conv_lstm = ConvLSTM(hidden_channels, out_channels, kernel_size, num_layers=1)
+        self.conv = nn.Conv2d(
+            in_channels, hidden_channels, kernel_size, stride, padding
+        )
+        self.conv_lstm = ConvLSTM(
+            hidden_channels, out_channels, kernel_size, num_layers=1
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b, t, c, h, w = x.size()
@@ -279,10 +274,11 @@ class UpBiLinearConvLSTM(nn.Module):
         x, _ = self.conv_lstm(x)
         b, t, c, h, w = x.size()
         x = rearrange(
-            self.up_scale(rearrange(x, "b t c h w -> (b t) c h w")),
-            "(b t) c h w -> b t c h w",
+            self.up_scale(rearrange(x, "b t c h w -> (b t c) h w")),
+            "(b t c) h w -> b t c h w",
             b=b,
             t=t,
+            c=c,
         )
 
         return x

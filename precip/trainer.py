@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 import precip
 import wandb
-from precip.data.dataset import InfiniteSampler
+from precip.data.dataset import ObservationWeightedOnlineSampler
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,10 @@ class Trainer:
         self.folder_name = (
             Path(precip.__file__).parents[1]
             / "checkpoints"
-            / (run_name + "".join(random.choices(string.ascii_uppercase + string.digits, k=5)))
+            / (
+                run_name
+                + "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
+            )
         )
         self.folder_name.mkdir(parents=True, exist_ok=True)
 
@@ -97,7 +100,9 @@ class Trainer:
         self.train_dataiter = iter(
             DataLoader(
                 dataset=training_dataset,
-                sampler=InfiniteSampler(training_dataset, shuffle=self.args.shuffle),
+                sampler=ObservationWeightedOnlineSampler(
+                    training_dataset, shuffle=self.args.shuffle
+                ),
                 batch_size=self.args.training_batch_size,
             )
         )
@@ -105,7 +110,9 @@ class Trainer:
             self.val_dataiter = iter(
                 DataLoader(
                     dataset=val_dataset,
-                    sampler=InfiniteSampler(val_dataset, shuffle=self.args.shuffle),
+                    sampler=ObservationWeightedOnlineSampler(
+                        val_dataset, shuffle=self.args.shuffle
+                    ),
                     batch_size=self.args.validation_batch_size,
                 )
             )
@@ -126,7 +133,9 @@ class Trainer:
         model = deepcopy(self.model)
         if self.args.load_from_checkpoint:
             assert self.args.checkpoint_path is not None
-            model.load_state_dict(torch.load(self.args.checkpoint_path)["model_state_dict"])
+            model.load_state_dict(
+                torch.load(self.args.checkpoint_path)["model_state_dict"]
+            )
         return model.to(self.args.device)
 
     def _get_loss(self):
@@ -190,7 +199,9 @@ class Trainer:
         return _loss.item()
 
     def calculate_loss(self, target, predictions):
-        return self.loss(self.output_transform(target), self.output_transform(predictions))
+        return self.loss(
+            self.output_transform(target), self.output_transform(predictions)
+        )
 
     def train_step(self, number_of_batches: int) -> float:
         self.model.train()
@@ -198,7 +209,10 @@ class Trainer:
 
         for _ in tqdm(range(number_of_batches)):
             (batch_X, batch_y) = next(self.train_dataiter)
-            batch_X, batch_y = batch_X.to(self.args.device), batch_y.to(self.args.device)
+            batch_X, batch_y = (
+                batch_X.to(self.args.device),
+                batch_y.to(self.args.device),
+            )
             self.optimizer.zero_grad()
             _loss = self._train_step(batch_X, batch_y)
             self.optimizer.step()
@@ -214,7 +228,10 @@ class Trainer:
 
         for _ in tqdm(range(number_of_batches)):
             batch_X, batch_y = next(self.val_dataiter)
-            batch_X, batch_y = batch_X.to(self.args.device), batch_y.to(self.args.device)
+            batch_X, batch_y = (
+                batch_X.to(self.args.device),
+                batch_y.to(self.args.device),
+            )
             forecasts = self._prediction(batch_X)
             _loss = self.calculate_loss(batch_y, forecasts)
             validation_loss_history.append(math.sqrt(_loss.item()))
@@ -254,5 +271,7 @@ class Trainer:
                 )
 
             if self.args.wandb_track:
-                wandb.log({"loss": {"train": np.mean(train_loss), "val": np.mean(val_loss)}})
+                wandb.log(
+                    {"loss": {"train": np.mean(train_loss), "val": np.mean(val_loss)}}
+                )
                 # wandb.log({"scheduler": {"lr": scheduler.get_last_lr()}})
