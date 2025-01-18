@@ -1,4 +1,4 @@
-name: mlpg
+name: wx
 channels:
   - conda-forge
 dependencies:
@@ -294,6 +294,10 @@ dependencies:
   - zipp=3.16.2=pyhd8ed1ab_0
   - zlib=1.2.13=hd590300_5
   - zstd=1.5.2=hfc55251_7
+  - xarray 
+  - dask
+  - netCDF4=1.5.8
+  - bottleneck
   - pip:
     - appdirs==1.4.4
     - black==23.7.0

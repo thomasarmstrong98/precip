@@ -1,7 +1,8 @@
-import torch
-from torch import nn
-import torch.nn.functional as F
 from typing import Optional
+
+import torch
+import torch.nn.functional as F
+from torch import nn
 
 
 def padded_reshape(x: torch.Tensor, y: torch.Tensor):
@@ -77,4 +78,4 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        return self.conv(unet_up_collate(x1, x2))
+        return self.conv(unet_up_collate(x2, x1))

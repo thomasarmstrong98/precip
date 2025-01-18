@@ -8,6 +8,9 @@ from torch.utils.data import Dataset, Sampler
 
 from precip.config import BOUNDARY_CLASSIFICATION_LABEL, LOCAL_PRECIP_DATA_PATH
 
+MEAN_UNSCALED = 97.8878521705089
+MEAN_SCALED = 0.3823744225410504
+
 
 def npy_loader(path):
     sample = torch.from_numpy(np.load(path)).float()
@@ -54,18 +57,12 @@ class SwedishPrecipitationDataset(Dataset):
         self.lookback_start_5_mins_multiple = lookback_start_5_mins_multiple
         self.lookback_intervals_5_mins_multiple = lookback_intervals_5_mins_multiple
         self.forecast_multistep = forecast_multistep
-        self.forecast_horizon_start_5_mins_multiple = (
-            forecast_horizon_start_5_mins_multiple
-        )
+        self.forecast_horizon_start_5_mins_multiple = forecast_horizon_start_5_mins_multiple
         self.forecast_intervals_5_mins_multiple = forecast_intervals_5_mins_multiple
         if not forecast_multistep:
-            self.forecast_horizon_end_5_mins_multiple = (
-                forecast_horizon_end_5_mins_multiple
-            )
+            self.forecast_horizon_end_5_mins_multiple = forecast_horizon_end_5_mins_multiple
         else:
-            self.forecast_horizon_end_5_mins_multiple = (
-                forecast_horizon_end_5_mins_multiple
-            )
+            self.forecast_horizon_end_5_mins_multiple = forecast_horizon_end_5_mins_multiple
         self.forecast_gap = forecast_gap_5_mins_multiple
         self.subsample = subsample
         self.scale = scale
@@ -83,18 +80,20 @@ class SwedishPrecipitationDataset(Dataset):
         data = h5py.File(root)
         keys = list(data.keys())
 
-        if split == "train":
+        if split.startswith("train"):
             keys = keys[
-                : int(
-                    SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX
-                    * self.subsample
-                )
+                : int(SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX * self.subsample)
             ]  # subsample means only train on part of dataset
 
-        elif split == "val":
+        elif split.startswith("val"):
             keys = keys[
-                SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX : int(
-                    SwedishPrecipitationDataset.VALIDATION_KEYS_LAST_INDEX
+                SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX : SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX
+                + 1
+                + int(
+                    (
+                        SwedishPrecipitationDataset.VALIDATION_KEYS_LAST_INDEX
+                        - SwedishPrecipitationDataset.TRAINING_KEYS_LAST_INDEX
+                    )
                     * self.subsample
                 )
             ]
@@ -132,9 +131,7 @@ class SwedishPrecipitationDataset(Dataset):
         forecast_index_start = (
             index + self.forecast_horizon_start_5_mins_multiple + self.forecast_gap
         )
-        forecast_index_end = (
-            index + self.forecast_horizon_end_5_mins_multiple + self.forecast_gap
-        )
+        forecast_index_end = index + self.forecast_horizon_end_5_mins_multiple + self.forecast_gap
 
         if self.forecast_multistep:
             y = np.concatenate(
@@ -180,12 +177,11 @@ class InfiniteSampler(Sampler):
         n: int,
         shuffle: bool = True,
         reshuffle: bool = False,
-        is_scaled: bool = True,
     ):
         self.n = n
         self.shuffle = shuffle
         self.reshuffle = reshuffle
-        self.is_scaled = is_scaled
+        self.epoch_num = 0
 
         if self.shuffle:
             self.order = np.random.choice(self.n, self.n)
@@ -199,6 +195,7 @@ class InfiniteSampler(Sampler):
                 # reshuffle
                 self.order = np.random.choice(self.n, self.n)
             index = 0  # reset back to beginning without reinit dataset object.
+            self.epoch_num += 1
 
         return index
 
@@ -211,7 +208,7 @@ class InfiniteSampler(Sampler):
 
 class ObservationWeightedOnlineSampler(InfiniteSampler):
     L2_SAMPLING_THRESHOLD = (
-        2_500.00  # take only observations with sufficient rainfall ~ 20% of dataset
+        1_200.00  # take only observations with sufficient rainfall ~ 20% of dataset
     )
 
     def __init__(
@@ -219,10 +216,9 @@ class ObservationWeightedOnlineSampler(InfiniteSampler):
         dataset,
         shuffle: bool = True,
         reshuffle: bool = False,
-        is_scaled: bool = True,
     ):
         n = len(dataset)
-        super().__init__(n, shuffle, reshuffle, is_scaled)
+        super().__init__(n, shuffle, reshuffle)
         self.dataset = dataset
 
     @staticmethod
@@ -230,8 +226,7 @@ class ObservationWeightedOnlineSampler(InfiniteSampler):
         X, _ = dataset[key]
         last_observation = X[-1, ...]
         sample = (
-            torch.sum(last_observation**2)
-            > ObservationWeightedOnlineSampler.L2_SAMPLING_THRESHOLD
+            torch.sum(last_observation**2) > ObservationWeightedOnlineSampler.L2_SAMPLING_THRESHOLD
         )
         return sample
 

@@ -10,7 +10,6 @@ import numpy as np
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
-from torchvision.transforms import CenterCrop
 from tqdm import tqdm
 
 import precip
@@ -26,11 +25,13 @@ class TrainerArgs:
     # training params
     wandb_track: bool = True
     iterative_multistep: bool = True
+    stop_gradient_propagation: bool = False
     training_batch_size: int = 1
     validation_batch_size: int = 1
-    number_of_steps: int = 100
+    number_of_steps: int = 1_000
     training_size_per_step: int = 500
     validation_size_per_step: int = 1_000
+    track_gradnorm: bool = True
 
     # optimizer
     lr: float = 5e-5
@@ -66,6 +67,7 @@ class Trainer:
         optimizer=None,
         scheduler=None,
         loss=None,
+        output_transform=None,
     ) -> None:
         self.model = model
         self.args = args
@@ -84,12 +86,10 @@ class Trainer:
         self.folder_name = (
             Path(precip.__file__).parents[1]
             / "checkpoints"
-            / (
-                run_name
-                + "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
-            )
+            / (run_name + "_".join(random.choices(string.ascii_uppercase + string.digits, k=5)))
         )
         self.folder_name.mkdir(parents=True, exist_ok=True)
+        print(self.folder_name)
 
         self.forecast_steps = (
             training_dataset.forecast_horizon_end_5_mins_multiple
@@ -97,29 +97,26 @@ class Trainer:
             - training_dataset.forecast_horizon_start_5_mins_multiple
         ) // training_dataset.forecast_intervals_5_mins_multiple
 
-        self.train_dataiter = iter(
-            DataLoader(
-                dataset=training_dataset,
-                sampler=ObservationWeightedOnlineSampler(
-                    training_dataset, shuffle=self.args.shuffle
-                ),
-                batch_size=self.args.training_batch_size,
-            )
+        self.train_dataloader = DataLoader(
+            dataset=training_dataset,
+            sampler=ObservationWeightedOnlineSampler(training_dataset, shuffle=self.args.shuffle),
+            batch_size=self.args.training_batch_size,
+            num_workers=1,  # mp.cpu_count() - 1,
         )
+        self.train_dataiter = iter(self.train_dataloader)
+
         if val_dataset is not None:
-            self.val_dataiter = iter(
-                DataLoader(
-                    dataset=val_dataset,
-                    sampler=ObservationWeightedOnlineSampler(
-                        val_dataset, shuffle=self.args.shuffle
-                    ),
-                    batch_size=self.args.validation_batch_size,
-                )
+            self.val_dataloader = DataLoader(
+                dataset=val_dataset,
+                sampler=ObservationWeightedOnlineSampler(val_dataset, shuffle=self.args.shuffle),
+                batch_size=self.args.validation_batch_size,
+                num_workers=1,  # mp.cpu_count() - 1,
             )
+            self.val_dataiter = iter(self.val_dataloader)
         else:
             self.val_dataiter = None
 
-        self.output_transform = CenterCrop((256, 256))  # hardcoded
+        self.output_transform = nn.Identity() if output_transform is None else output_transform
 
         self._setup()
 
@@ -133,9 +130,7 @@ class Trainer:
         model = deepcopy(self.model)
         if self.args.load_from_checkpoint:
             assert self.args.checkpoint_path is not None
-            model.load_state_dict(
-                torch.load(self.args.checkpoint_path)["model_state_dict"]
-            )
+            model.load_state_dict(torch.load(self.args.checkpoint_path)["model_state_dict"])
         return model.to(self.args.device)
 
     def _get_loss(self):
@@ -161,18 +156,22 @@ class Trainer:
 
     def _get_optimizer(self):
         if self.optimizer is not None:
-            return self.optimizer
+            return self.optimizer(self.model.parameters(), lr=self.args.lr)
         else:
-            return optim.Adam(self.model.parameters(), lr=self.args.lr)
+            return optim.AdamW(self.model.parameters(), lr=self.args.lr)
 
     def _scheduler_step(self, validation_loss):
         self.scheduler.step(validation_loss)
 
-    def _multistep_prediction(self, batch_X):
+    def _multistep_prediction(self, batch_X, stop_gradient_propagation: bool = False):
         forecasts = list()
 
         for forecast_step in range(self.forecast_steps):
             predictions = self.model(batch_X).unsqueeze(1)
+
+            if stop_gradient_propagation:
+                predictions = predictions.detach()
+
             forecasts.append(predictions)
 
             # update the input frame to the model
@@ -188,7 +187,7 @@ class Trainer:
 
     def _prediction(self, batch_X):
         if self.args.iterative_multistep:
-            return self._multistep_prediction(batch_X)
+            return self._multistep_prediction(batch_X, self.args.stop_gradient_propagation)
         else:
             return self._singlestep_prediction(batch_X)
 
@@ -199,13 +198,14 @@ class Trainer:
         return _loss.item()
 
     def calculate_loss(self, target, predictions):
-        return self.loss(
-            self.output_transform(target), self.output_transform(predictions)
-        )
 
-    def train_step(self, number_of_batches: int) -> float:
+        # return self.loss(self.output_transform(target), self.output_transform(predictions))
+        return self.loss(predictions, target.long())
+
+    def train_step(self, number_of_batches: int) -> tuple[float, float]:
         self.model.train()
         loss_history = list()
+        norms_history = list()
 
         for _ in tqdm(range(number_of_batches)):
             (batch_X, batch_y) = next(self.train_dataiter)
@@ -217,9 +217,18 @@ class Trainer:
             _loss = self._train_step(batch_X, batch_y)
             self.optimizer.step()
 
-            loss_history.append(math.sqrt(_loss))
+            if self.args.track_gradnorm:
+                grads = [
+                    param.grad.detach().flatten()
+                    for param in self.model.parameters()
+                    if param.grad is not None
+                ]
+                norm = torch.cat(grads).norm().mean().cpu().numpy()
 
-        return np.mean(loss_history).item()
+            loss_history.append(math.sqrt(_loss))
+            norms_history.append(norm)
+
+        return np.mean(loss_history).item(), np.mean(norms_history).item()
 
     @torch.no_grad()
     def evaluate_step(self, number_of_batches: int = 300) -> float:
@@ -239,7 +248,7 @@ class Trainer:
 
     def train(self):
         for step_num in range(0, self.args.number_of_steps):
-            train_loss = self.train_step(self.args.training_size_per_step)
+            train_loss, gradnorm = self.train_step(self.args.training_size_per_step)
             print(train_loss)
 
             if self.val_dataiter is not None:
@@ -249,10 +258,7 @@ class Trainer:
                 val_loss = np.nan
 
             number_of_obs = (
-                self.args.training_batch_size
-                * self.args.training_size_per_step
-                * self.args.number_of_steps
-                * (step_num + 1)
+                self.args.training_batch_size * self.args.training_size_per_step * (step_num + 1)
             )
 
             if (
@@ -271,7 +277,12 @@ class Trainer:
                 )
 
             if self.args.wandb_track:
-                wandb.log(
-                    {"loss": {"train": np.mean(train_loss), "val": np.mean(val_loss)}}
-                )
+                _payload = {
+                    "loss": {"train": train_loss, "val": val_loss},
+                    "num_samples": number_of_obs,
+                    "epoch": self.train_dataloader.sampler.epoch_num,
+                }
+                if self.args.track_gradnorm:
+                    _payload.update(gradnorm=gradnorm)
+                wandb.log(_payload)
                 # wandb.log({"scheduler": {"lr": scheduler.get_last_lr()}})
